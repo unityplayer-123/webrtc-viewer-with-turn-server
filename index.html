@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Unity WebRTC Viewer</title>
+  <style>
+    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    video { width: 80%; max-width: 800px; border: 2px solid #fff; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <video id="remoteVideo" autoplay playsinline></video>
+
+  <script>
+    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302"] },
+        { urls: ["turn:openrelay.metered.ca:443"], username: "openrelayproject", credential: "openrelayproject" }
+      ]
+    });
+
+    const videoEl = document.getElementById("remoteVideo");
+
+    // Unity からの映像を受信
+    pc.ontrack = (event) => {
+      videoEl.srcObject = event.streams[0];
+      console.log("Remote stream attached");
+    };
+
+    // ICE候補をシグナリングサーバーへ送信
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex
+        }));
+      }
+    };
+
+    // WebSocket でシグナリング
+    const ws = new WebSocket(signalingUrl);
+    ws.onopen = () => {
+      console.log("Connected to signaling server");
+    };
+
+    ws.onmessage = async (msg) => {
+      const data = JSON.parse(msg.data);
+
+      if (data.type === "offer") {
+        // UnityからのOfferを受け取りAnswer作成
+        await pc.setRemoteDescription(data);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+          type: "answer",
+          sdp: answer.sdp
+        }));
+      }
+      else if (data.type === "candidate") {
+        try {
+          await pc.addIceCandidate(data);
+        } catch (err) {
+          console.error("Error adding ICE candidate:", err);
+        }
+      }
+    };
+  </script>
+</body>
+</html>
