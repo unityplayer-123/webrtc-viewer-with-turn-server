@@ -1,66 +1,93 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>WebRTC Viewer</title>
+  <title>Unity WebRTC Viewer</title>
+  <style>
+    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    video { width: 80%; max-width: 800px; border: 2px solid #fff; border-radius: 10px; }
+  </style>
 </head>
 <body>
-  <h2>Unity WebRTC Viewer</h2>
-  <video id="remoteVideo" autoplay playsinline controls></video>
+  <video id="remoteVideo" autoplay playsinline></video>
 
   <script>
-    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com"; 
-    const ws = new WebSocket(signalingUrl);
+    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302"] },
+        { urls: ["turn:openrelay.metered.ca:443"], username: "openrelayproject", credential: "openrelayproject" }
+      ]
+    });
 
-    let pc = null;
+    const videoEl = document.getElementById("remoteVideo");
 
-    ws.onopen = () => {
-      console.log("[WebSocket] Connected to signaling server");
+    // Unity からの映像を受信
+    pc.ontrack = (event) => {
+      videoEl.srcObject = event.streams[0];
+      console.log("[Viewer] Remote stream attached");
     };
 
-    ws.onmessage = async (event) => {
-      const msg = JSON.parse(event.data);
-      console.log("[WebSocket] Received:", msg);
+    // ICE候補が生成されたらシグナリングサーバーへ送信
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex
+        }));
+        console.log("[Viewer] Sent ICE candidate");
+      }
+    };
 
-      if (msg.type === "offer") {
-        console.log("[WebRTC] Received offer from Unity");
+    // WebSocket 接続
+    const ws = new WebSocket(signalingUrl);
 
-        // PeerConnection作成
-        pc = new RTCPeerConnection();
+    ws.onopen = () => {
+      console.log("[Viewer] Connected to signaling server");
+    };
 
-        // リモートストリームを <video> にセット
-        pc.ontrack = (event) => {
-          console.log("[WebRTC] Remote track received");
-          document.getElementById("remoteVideo").srcObject = event.streams[0];
-        };
+    ws.onmessage = async (msg) => {
+      const data = JSON.parse(msg.data);
 
-        // DataChannel用の受信確認（任意）
-        pc.ondatachannel = (event) => {
-          const channel = event.channel;
-          channel.onmessage = (e) => console.log("[DataChannel]", e.data);
-        };
+      if (data.type === "offer") {
+        console.log("[Viewer] Received Offer from Unity");
 
-        // UnityからのOfferを適用
-        await pc.setRemoteDescription(new RTCSessionDescription(msg));
+        // Offer をセット
+        await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
 
-        // Answerを作成して送信
+        // Answer を作成
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
+        // Answer を Unity に送信
         ws.send(JSON.stringify({
           type: "answer",
           sdp: answer.sdp
         }));
-        console.log("[WebRTC] Answer sent");
-      }
-      else if (msg.type === "candidate" && pc) {
-        console.log("[WebRTC] Adding ICE candidate");
+
+        console.log("[Viewer] Sent Answer to Unity");
+      } else if (data.type === "candidate") {
         try {
-          await pc.addIceCandidate(msg.candidate);
+          await pc.addIceCandidate({
+            candidate: data.candidate,
+            sdpMid: data.sdpMid,
+            sdpMLineIndex: data.sdpMLineIndex
+          });
+          console.log("[Viewer] Added ICE candidate from Unity");
         } catch (err) {
-          console.error("Error adding ICE candidate:", err);
+          console.error("[Viewer] Error adding ICE candidate:", err);
         }
       }
+    };
+
+    ws.onclose = (event) => {
+      console.warn("[Viewer] WebSocket closed:", event);
+    };
+
+    ws.onerror = (err) => {
+      console.error("[Viewer] WebSocket error:", err);
     };
   </script>
 </body>
