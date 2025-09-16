@@ -25,12 +25,13 @@
     // Unity からの映像を受信
     pc.ontrack = (event) => {
       videoEl.srcObject = event.streams[0];
-      console.log("Remote stream attached");
+      console.log("✅ Remote stream attached");
     };
 
     // ICE候補をシグナリングサーバーへ送信
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("📤 Sending ICE candidate:", event.candidate);
         ws.send(JSON.stringify({
           type: "candidate",
           candidate: event.candidate.candidate,
@@ -43,28 +44,40 @@
     // WebSocket でシグナリング
     const ws = new WebSocket(signalingUrl);
     ws.onopen = () => {
-      console.log("Connected to signaling server");
+      console.log("✅ Connected to signaling server");
     };
 
     ws.onmessage = async (msg) => {
       const data = JSON.parse(msg.data);
+      console.log("📩 Received message:", data);
 
       if (data.type === "offer") {
-        // UnityからのOfferを受け取りAnswer作成
-        await pc.setRemoteDescription(data);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        try {
+          console.log("📥 Setting remote description (offer)");
+          await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
 
-        ws.send(JSON.stringify({
-          type: "answer",
-          sdp: answer.sdp
-        }));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          console.log("📤 Sending answer");
+          ws.send(JSON.stringify({
+            type: "answer",
+            sdp: answer.sdp
+          }));
+        } catch (err) {
+          console.error("❌ Error handling offer:", err);
+        }
       }
       else if (data.type === "candidate") {
         try {
-          await pc.addIceCandidate(data);
+          console.log("📥 Adding ICE candidate:", data);
+          await pc.addIceCandidate({
+            candidate: data.candidate,
+            sdpMid: data.sdpMid,
+            sdpMLineIndex: data.sdpMLineIndex
+          });
         } catch (err) {
-          console.error("Error adding ICE candidate:", err);
+          console.error("❌ Error adding ICE candidate:", err);
         }
       }
     };
