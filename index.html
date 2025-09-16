@@ -1,86 +1,68 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Unity WebRTC Viewer</title>
-  <style>
-    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    video { width: 80%; max-width: 800px; border: 2px solid #fff; border-radius: 10px; }
-  </style>
+  <title>WebRTC Viewer</title>
 </head>
 <body>
-  <video id="remoteVideo" autoplay playsinline></video>
+  <h2>Unity WebRTC Viewer</h2>
+  <video id="remoteVideo" autoplay playsinline controls></video>
 
   <script>
-    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: ["stun:stun.l.google.com:19302"] },
-        { urls: ["turn:openrelay.metered.ca:443"], username: "openrelayproject", credential: "openrelayproject" }
-      ]
-    });
-
-    const videoEl = document.getElementById("remoteVideo");
-
-    // Unity からの映像を受信
-    pc.ontrack = (event) => {
-      videoEl.srcObject = event.streams[0];
-      console.log("✅ Remote stream attached");
-    };
-
-    // ICE候補をシグナリングサーバーへ送信
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("📤 Sending ICE candidate:", event.candidate);
-        ws.send(JSON.stringify({
-          type: "candidate",
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex
-        }));
-      }
-    };
-
-    // WebSocket でシグナリング
+    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com"; 
     const ws = new WebSocket(signalingUrl);
+
+    let pc = null;
+
     ws.onopen = () => {
-      console.log("✅ Connected to signaling server");
+      console.log("[WebSocket] Connected to signaling server");
     };
 
-    ws.onmessage = async (msg) => {
-      const data = JSON.parse(msg.data);
-      console.log("📩 Received message:", data);
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
+      console.log("[WebSocket] Received:", msg);
 
-      if (data.type === "offer") {
-        try {
-          console.log("📥 Setting remote description (offer)");
-          await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+      if (msg.type === "offer") {
+        console.log("[WebRTC] Received offer from Unity");
 
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
+        // PeerConnection作成
+        pc = new RTCPeerConnection();
 
-          console.log("📤 Sending answer");
-          ws.send(JSON.stringify({
-            type: "answer",
-            sdp: answer.sdp
-          }));
-        } catch (err) {
-          console.error("❌ Error handling offer:", err);
-        }
+        // リモートストリームを <video> にセット
+        pc.ontrack = (event) => {
+          console.log("[WebRTC] Remote track received");
+          document.getElementById("remoteVideo").srcObject = event.streams[0];
+        };
+
+        // DataChannel用の受信確認（任意）
+        pc.ondatachannel = (event) => {
+          const channel = event.channel;
+          channel.onmessage = (e) => console.log("[DataChannel]", e.data);
+        };
+
+        // UnityからのOfferを適用
+        await pc.setRemoteDescription(new RTCSessionDescription(msg));
+
+        // Answerを作成して送信
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({
+          type: "answer",
+          sdp: answer.sdp
+        }));
+        console.log("[WebRTC] Answer sent");
       }
-      else if (data.type === "candidate") {
+      else if (msg.type === "candidate" && pc) {
+        console.log("[WebRTC] Adding ICE candidate");
         try {
-          console.log("📥 Adding ICE candidate:", data);
-          await pc.addIceCandidate({
-            candidate: data.candidate,
-            sdpMid: data.sdpMid,
-            sdpMLineIndex: data.sdpMLineIndex
-          });
+          await pc.addIceCandidate(msg.candidate);
         } catch (err) {
-          console.error("❌ Error adding ICE candidate:", err);
+          console.error("Error adding ICE candidate:", err);
         }
       }
     };
   </script>
 </body>
 </html>
+
