@@ -1,81 +1,95 @@
-<script>
-  const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Unity WebRTC Viewer</title>
+  <style>
+    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    video { width: 80%; max-width: 800px; border: 2px solid #fff; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <video id="remoteVideo" autoplay playsinline></video>
 
-  // STUN/TURN サーバー設定
-  const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: ["stun:stun.l.google.com:19302"] },
-      {
-        urls: [
-          "turn:openrelay.metered.ca:80",
-          "turn:openrelay.metered.ca:443",
-          "turn:openrelay.metered.ca:443?transport=tcp"
-        ],
-        username: "openrelayproject",
-        credential: "openrelayproject"
+  <script>
+    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: ["stun:stun.l.google.com:19302"] },
+        { urls: ["turn:openrelay.metered.ca:443"], username: "openrelayproject", credential: "openrelayproject" }
+      ]
+    });
+
+    const videoEl = document.getElementById("remoteVideo");
+
+    // Unity からの映像を受信
+    pc.ontrack = (event) => {
+      videoEl.srcObject = event.streams[0];
+      console.log("[Viewer] Remote stream attached");
+    };
+
+    // ICE候補が生成されたらシグナリングサーバーへ送信
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex
+        }));
+        console.log("[Viewer] Sent ICE candidate");
       }
-    ]
-  });
+    };
 
-  const videoEl = document.getElementById("remoteVideo");
+    // WebSocket 接続
+    const ws = new WebSocket(signalingUrl);
 
-  // Unityからの映像を受信
-  pc.ontrack = (event) => {
-    videoEl.srcObject = event.streams[0];
-    console.log("Remote stream attached");
-  };
+    ws.onopen = () => {
+      console.log("[Viewer] Connected to signaling server");
+    };
 
-  // ICE候補をシグナリングサーバーへ送信
-  pc.onicecandidate = (event) => {
-    if (event.candidate) {
-      ws.send(JSON.stringify({
-        type: "candidate",
-        candidate: event.candidate.candidate,
-        sdpMid: event.candidate.sdpMid,
-        sdpMLineIndex: event.candidate.sdpMLineIndex
-      }));
-    }
-  };
+    ws.onmessage = async (msg) => {
+      const data = JSON.parse(msg.data);
 
-  // WebSocketでシグナリング
-  const ws = new WebSocket(signalingUrl);
-  ws.onopen = () => {
-    console.log("Connected to signaling server");
-  };
+      if (data.type === "offer") {
+        console.log("[Viewer] Received Offer from Unity");
 
-  ws.onmessage = async (msg) => {
-    const data = JSON.parse(msg.data);
+        // Offer をセット
+        await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
 
-    if (data.type === "offer") {
-      console.log("Received offer from Unity");
+        // Answer を作成
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
 
-      // UnityのOfferは { type:"offer", sdp:"..." }
-      await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+        // Answer を Unity に送信
+        ws.send(JSON.stringify({
+          type: "answer",
+          sdp: answer.sdp
+        }));
 
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      // Answerは { type:"answer", sdp:"..." }
-      ws.send(JSON.stringify({
-        type: "answer",
-        sdp: answer.sdp
-      }));
-      console.log("Answer sent to Unity");
-
-    } else if (data.type === "candidate") {
-      // Candidateは { type:"candidate", candidate:"...", sdpMid:"...", sdpMLineIndex:0 }
-      try {
-        await pc.addIceCandidate({
-          candidate: data.candidate,
-          sdpMid: data.sdpMid,
-          sdpMLineIndex: data.sdpMLineIndex
-        });
-        console.log("ICE candidate added");
-      } catch (err) {
-        console.error("Error adding ICE candidate:", err);
+        console.log("[Viewer] Sent Answer to Unity");
+      } else if (data.type === "candidate") {
+        try {
+          await pc.addIceCandidate({
+            candidate: data.candidate,
+            sdpMid: data.sdpMid,
+            sdpMLineIndex: data.sdpMLineIndex
+          });
+          console.log("[Viewer] Added ICE candidate from Unity");
+        } catch (err) {
+          console.error("[Viewer] Error adding ICE candidate:", err);
+        }
       }
-    }
-  };
-</script>
+    };
 
+    ws.onclose = (event) => {
+      console.warn("[Viewer] WebSocket closed:", event);
+    };
+
+    ws.onerror = (err) => {
+      console.error("[Viewer] WebSocket error:", err);
+    };
+  </script>
+</body>
+</html>
 
