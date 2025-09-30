@@ -4,7 +4,7 @@
   // STUN/TURN サーバー設定
   const pc = new RTCPeerConnection({
     iceServers: [
-      { urls: ["stun:openrelay.metered.ca:80"] },
+      { urls: ["stun:stun.l.google.com:19302"] },
       {
         urls: [
           "turn:openrelay.metered.ca:80",
@@ -48,18 +48,28 @@
 
     if (data.type === "offer") {
       console.log("Received offer from Unity");
-      await pc.setRemoteDescription(data);
+
+      // UnityのOfferは { type:"offer", sdp:"..." }
+      await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
+      // Answerは { type:"answer", sdp:"..." }
       ws.send(JSON.stringify({
         type: "answer",
         sdp: answer.sdp
       }));
       console.log("Answer sent to Unity");
+
     } else if (data.type === "candidate") {
+      // Candidateは { type:"candidate", candidate:"...", sdpMid:"...", sdpMLineIndex:0 }
       try {
-        await pc.addIceCandidate(data);
+        await pc.addIceCandidate({
+          candidate: data.candidate,
+          sdpMid: data.sdpMid,
+          sdpMLineIndex: data.sdpMLineIndex
+        });
         console.log("ICE candidate added");
       } catch (err) {
         console.error("Error adding ICE candidate:", err);
@@ -67,4 +77,5 @@
     }
   };
 </script>
+
 
