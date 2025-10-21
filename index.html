@@ -1,82 +1,60 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>Unity WebRTC Viewer</title>
-  <style>
-    body {
-      background: #111;
-      color: #fff;
-      text-align: center;
-      font-family: sans-serif;
-    }
-    video {
-      width: 90%;
-      max-width: 800px;
-      margin-top: 40px;
-      background: #000;
-      border: 2px solid #333;
-      border-radius: 12px;
-    }
-  </style>
+<meta charset="utf-8">
+<title>Unity WebRTC Viewer</title>
+<style>
+  body { background: #111; color: #fff; text-align: center; }
+  video { width: 90%; max-width: 800px; margin-top: 30px; border-radius: 10px; }
+</style>
 </head>
 <body>
-  <h1>Unity WebRTC Viewer</h1>
+  <h2>Unity WebRTC Viewer</h2>
   <video id="remoteVideo" autoplay playsinline></video>
 
   <script>
-    const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
-    const configuration = {
+    const wsUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
+    const ws = new WebSocket(wsUrl);
+    const pc = new RTCPeerConnection({
       iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
         {
           urls: [
-            "turn:openrelay.metered.ca:80",
-            "turn:openrelay.metered.ca:443",
-            "turns:openrelay.metered.ca:443"
+            "stun:mocopiwebrtc.metered.live:80",
+            "turn:mocopiwebrtc.metered.live:80?transport=udp",
+            "turn:mocopiwebrtc.metered.live:443?transport=tcp"
           ],
           username: "openrelayproject",
           credential: "openrelayproject"
         }
       ]
-    };
+    });
 
-    const pc = new RTCPeerConnection(configuration);
     const video = document.getElementById("remoteVideo");
 
-    pc.ontrack = (event) => {
-      console.log("📡 Remote track received");
-      video.srcObject = event.streams[0];
+    pc.ontrack = e => {
+      video.srcObject = e.streams[0];
     };
 
-    const ws = new WebSocket(signalingUrl);
-
-    ws.onopen = () => {
-      console.log("[WebSocket] Connected to signaling server");
-      ws.send(JSON.stringify({ type: "viewer" }));
-    };
-
-    ws.onmessage = async (event) => {
+    ws.onmessage = async event => {
       const msg = JSON.parse(event.data);
-      console.log("📩 Message:", msg.type);
-
       if (msg.type === "offer") {
         await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
       } else if (msg.type === "candidate") {
-        try {
-          await pc.addIceCandidate(msg.candidate);
-        } catch (e) {
-          console.warn("Candidate add error:", e);
-        }
+        await pc.addIceCandidate(msg);
       }
     };
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        ws.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          candidate: e.candidate.candidate,
+          sdpMid: e.candidate.sdpMid,
+          sdpMLineIndex: e.candidate.sdpMLineIndex
+        }));
       }
     };
   </script>
