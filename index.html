@@ -9,54 +9,63 @@
 </style>
 </head>
 <body>
-  <h2>Unity WebRTC Viewer</h2>
-  <video id="remoteVideo" autoplay playsinline></video>
+<h2>Unity WebRTC Viewer</h2>
+<video id="remoteVideo" autoplay playsinline></video>
 
-  <script>
-    const wsUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
-    const ws = new WebSocket(wsUrl);
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        {
-          urls: [
-            "stun:mocopiwebrtc.metered.live:80",
-            "turn:mocopiwebrtc.metered.live:80?transport=udp",
-            "turn:mocopiwebrtc.metered.live:443?transport=tcp"
-          ],
-          username: "openrelayproject",
-          credential: "openrelayproject"
-        }
-      ]
-    });
+<script>
+const wsUrl = `wss://${window.location.host}`;
+console.log("Connecting to signaling server:", wsUrl);
 
-    const video = document.getElementById("remoteVideo");
+const ws = new WebSocket(wsUrl);
 
-    pc.ontrack = e => {
-      video.srcObject = e.streams[0];
-    };
+const pc = new RTCPeerConnection({
+  iceServers: [
+    {
+      urls: [
+        "stun:mocopiwebrtc.metered.live:80",
+        "turn:mocopiwebrtc.metered.live:80?transport=udp",
+        "turn:mocopiwebrtc.metered.live:443?transport=tcp"
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ]
+});
 
-    ws.onmessage = async event => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === "offer") {
-        await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
-      } else if (msg.type === "candidate") {
-        await pc.addIceCandidate(msg);
-      }
-    };
+const video = document.getElementById("remoteVideo");
 
-    pc.onicecandidate = e => {
-      if (e.candidate) {
-        ws.send(JSON.stringify({
-          type: "candidate",
-          candidate: e.candidate.candidate,
-          sdpMid: e.candidate.sdpMid,
-          sdpMLineIndex: e.candidate.sdpMLineIndex
-        }));
-      }
-    };
-  </script>
+pc.ontrack = e => {
+  video.srcObject = e.streams[0];
+};
+
+ws.onopen = () => console.log("✅ WebSocket connected");
+ws.onerror = err => console.error("❌ WebSocket error", err);
+ws.onclose = () => console.log("🔌 WebSocket closed");
+
+ws.onmessage = async event => {
+  const msg = JSON.parse(event.data);
+
+  if (msg.type === "offer") {
+    console.log("Received offer");
+    await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+  } else if (msg.type === "candidate") {
+    await pc.addIceCandidate(msg);
+  }
+};
+
+pc.onicecandidate = e => {
+  if (e.candidate) {
+    ws.send(JSON.stringify({
+      type: "candidate",
+      candidate: e.candidate.candidate,
+      sdpMid: e.candidate.sdpMid,
+      sdpMLineIndex: e.candidate.sdpMLineIndex
+    }));
+  }
+};
+</script>
 </body>
 </html>
