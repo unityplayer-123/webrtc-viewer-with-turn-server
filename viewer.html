@@ -13,10 +13,14 @@
 <video id="remoteVideo" autoplay playsinline></video>
 
 <script>
-const wsUrl = `wss://${window.location.host}`;
+const wsUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
 console.log("Connecting to signaling server:", wsUrl);
 
 const ws = new WebSocket(wsUrl);
+
+ws.onopen = () => console.log("✅ WebSocket connected");
+ws.onerror = err => console.error("❌ WebSocket error", err);
+ws.onclose = () => console.log("🔌 WebSocket closed");
 
 const pc = new RTCPeerConnection({
   iceServers: [
@@ -35,29 +39,39 @@ const pc = new RTCPeerConnection({
 const video = document.getElementById("remoteVideo");
 
 pc.ontrack = e => {
+  console.log("✅ Received remote track");
   video.srcObject = e.streams[0];
 };
 
-ws.onopen = () => console.log("✅ WebSocket connected");
-ws.onerror = err => console.error("❌ WebSocket error", err);
-ws.onclose = () => console.log("🔌 WebSocket closed");
-
+// WebSocketからのメッセージ処理
 ws.onmessage = async event => {
   const msg = JSON.parse(event.data);
+  console.log("📩 Received signaling message:", msg);
 
-  if (msg.type === "offer") {
-    console.log("Received offer");
-    await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
-  } else if (msg.type === "candidate") {
-    await pc.addIceCandidate(msg);
+  try {
+    if (msg.type === "offer") {
+      console.log("Received offer from Unity");
+      await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      console.log("Sending answer back to Unity");
+      ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+
+    } else if (msg.type === "candidate") {
+      console.log("Adding ICE candidate:", msg);
+      await pc.addIceCandidate(msg);
+    }
+  } catch (err) {
+    console.error("Error handling signaling message:", err);
   }
 };
 
+// ICE candidateが発生したらUnityに送信
 pc.onicecandidate = e => {
   if (e.candidate) {
+    console.log("Sending ICE candidate to Unity:", e.candidate);
     ws.send(JSON.stringify({
       type: "candidate",
       candidate: e.candidate.candidate,
@@ -66,6 +80,7 @@ pc.onicecandidate = e => {
     }));
   }
 };
+
 </script>
 </body>
 </html>
