@@ -1,114 +1,160 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Unity WebRTC Viewer</title>
-  <style>
-    body {
-      background-color: #111;
-      color: #fff;
-      text-align: center;
-      margin: 0;
-      font-family: sans-serif;
-    }
-    h1 {
-      margin: 20px 0;
-      color: #0ff;
-    }
-    video {
-      width: 90%;
-      max-width: 800px;
-      border: 3px solid #0ff;
-      border-radius: 12px;
-      background-color: #000;
-    }
-    #status {
-      margin-top: 10px;
-      color: #0f0;
-      font-size: 1rem;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>WebRTC Viewer</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        video { width: 100%; max-width: 640px; border: 1px solid #333; margin-bottom: 10px; }
+        button { margin-right: 10px; margin-bottom: 10px; }
+        textarea { width: 100%; max-width: 640px; }
+    </style>
 </head>
 <body>
-  <h1>🎥 Unity WebRTC Viewer</h1>
-  <video id="remoteVideo" autoplay playsinline></video>
-  <div id="status">Connecting...</div>
+    <h2>WebRTC Viewer (Unity → Browser)</h2>
+    
+    <video id="remoteVideo" autoplay playsinline controls></video>
+    
+    <div>
+        <button onclick="connect()">Connect</button>
+        <button onclick="hangUp()">Hang Up</button>
+    </div>
+    
+    <p>SDP (for debug):<br>
+        <textarea id="sdpDebug" rows="5" readonly></textarea>
+    </p>
 
-  <script>
-    // === WebSocket Signaling Server ===
-    const wsUrl = "wss://webrtc-signaling-server-va4t.onrender.com"; // Render.com のシグナリングサーバー
-    console.log("Connecting to signaling server:", wsUrl);
-    const ws = new WebSocket(wsUrl);
+<script>
+let pc = null;
+let ws = null;
+const remoteVideo = document.getElementById('remoteVideo');
+const sdpDebug = document.getElementById('sdpDebug');
 
-    // === TURN/STUN 設定（OpenRelay / mocopiwebrtc 用） ===
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.relay.metered.ca:80" },
-        {
-          urls: [
-            "turn:standard.relay.metered.ca:80",
-            "turn:standard.relay.metered.ca:80?transport=tcp",
-            "turn:standard.relay.metered.ca:443",
-            "turns:standard.relay.metered.ca:443?transport=tcp"
-          ],
-          username: "122d34ed058124a8f4651057",
-          credential: "T/tLmU7aLcvuABaW"
-        }
-      ]
-    });
+// --- Signaling server URL (Render.com) ---
+const signalingUrl = "wss://webrtc-signaling-server-va4t.onrender.com";
 
-    const video = document.getElementById("remoteVideo");
-    const status = document.getElementById("status");
+// --- Connect to signaling server ---
+function connect() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        console.warn("WebSocket already connected");
+        return;
+    }
 
-    pc.ontrack = e => {
-      console.log("🎥 Track received");
-      video.srcObject = e.streams[0];
-      status.textContent = "✅ Stream received!";
-    };
+    ws = new WebSocket(signalingUrl);
 
     ws.onopen = () => {
-      console.log("✅ WebSocket connected");
-      status.textContent = "Connected to signaling server.";
-    };
-    ws.onerror = err => {
-      console.error("❌ WebSocket error", err);
-      status.textContent = "WebSocket error.";
-    };
-    ws.onclose = () => {
-      console.log("🔌 WebSocket closed");
-      status.textContent = "Disconnected.";
+        console.log("WebSocket connected");
+        // ブラウザの role をサーバに通知
+        ws.send(JSON.stringify({ role: "browser" }));
     };
 
-    // === メッセージ受信処理 ===
-    ws.onmessage = async event => {
-      const msg = JSON.parse(event.data);
-      console.log("📩 Message received:", msg.type);
+    ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        console.log("Received message:", msg);
 
-      if (msg.type === "offer") {
-        console.log("🎬 Received offer from Unity");
-        status.textContent = "Received offer, creating answer...";
-        await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
-        status.textContent = "Answer sent!";
-      } else if (msg.type === "candidate") {
-        await pc.addIceCandidate(msg);
-        console.log("🧊 Added ICE candidate");
-      }
+        switch(msg.type) {
+            case "offer":
+                handleOffer(msg);
+                break;
+            case "answer":
+                if (pc) {
+                    await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+                    console.log("Answer applied to PC");
+                }
+                break;
+            case "candidate":
+                if (pc && msg.candidate) {
+                    try {
+                        await pc.addIceCandidate({
+                            candidate: msg.candidate,
+                            sdpMid: msg.sdpMid,
+                            sdpMLineIndex: msg.sdpMLineIndex
+                        });
+                        console.log("ICE Candidate added");
+                    } catch(e) {
+                        console.error("Failed to add ICE candidate:", e);
+                    }
+                }
+                break;
+            default:
+                console.warn("Unknown message type:", msg.type);
+        }
     };
 
-    // === ICE Candidate送信 ===
-    pc.onicecandidate = e => {
-      if (e.candidate) {
+    ws.onerror = (err) => console.error("WebSocket error:", err);
+    ws.onclose = () => console.log("WebSocket closed");
+}
+
+// --- Handle Unity Offer ---
+async function handleOffer(offer) {
+    console.log("Handling Offer from Unity...");
+
+    pc = new RTCPeerConnection({
+        iceServers: [
+            { urls: "stun:stun.relay.metered.ca:80" },
+            {
+                urls: [
+                    "turn:standard.relay.metered.ca:80",
+                    "turn:standard.relay.metered.ca:80?transport=tcp",
+                    "turn:standard.relay.metered.ca:443",
+                    "turns:standard.relay.metered.ca:443?transport=tcp"
+                ],
+                username: "122d34ed058124a8f4651057",
+                credential: "T/tLmU7aLcvuABaW"
+            }
+        ]
+    });
+
+    // --- Remote track ---
+    pc.ontrack = (event) => {
+        console.log("Remote track received!");
+        remoteVideo.srcObject = event.streams[0];
+    };
+
+    // --- ICE Candidate ---
+    pc.onicecandidate = (ice) => {
+        if (ice.candidate && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: "candidate",
+                candidate: ice.candidate.candidate,
+                sdpMid: ice.candidate.sdpMid,
+                sdpMLineIndex: ice.candidate.sdpMLineIndex
+            }));
+        }
+    };
+
+    // --- Set remote description ---
+    await pc.setRemoteDescription({ type: "offer", sdp: offer.sdp });
+
+    // --- Create answer ---
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // --- Send answer back to Unity ---
+    if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
-          type: "candidate",
-          candidate: e.candidate.candidate,
-          sdpMid: e.candidate.sdpMid,
-          sdpMLineIndex: e.candidate.sdpMLineIndex
+            type: "answer",
+            sdp: answer.sdp
         }));
-      }
-    };
-  </script>
+    }
+
+    console.log("Answer sent to Unity");
+    sdpDebug.value = answer.sdp;
+}
+
+// --- Hang Up ---
+function hangUp() {
+    if (pc) {
+        pc.close();
+        pc = null;
+    }
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+    remoteVideo.srcObject = null;
+    console.log("Connection closed");
+}
+</script>
 </body>
 </html>
